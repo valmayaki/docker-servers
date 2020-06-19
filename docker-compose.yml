@@ -1,0 +1,58 @@
+version: '3'
+services:
+  nodejs:
+    image: node-ffmpeg
+    build:
+      context: node
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+
+  mysql8:
+    image: mysql8
+    build:
+      context: mysql8
+      dockerfile: Dockerfile
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: freedb
+    volumes:
+      - ./mysql8/data:/var/lib/mysql
+    ports:
+      - "33068:3306"
+
+  mysql:
+    image: mysql
+    build:
+      context: mysql
+      dockerfile: Dockerfile
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: freedb
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+    ports:
+      - "33069:3306"
+
+  rabbitmq:
+    image: rabbitmq
+    build:
+      context: rabbitmq
+      dockerfile: Dockerfile
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+
+  pgsql:
+    image: pgsql
+    build:
+      context: pgsql
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: freedb
+    volumes:
+      - ./pgsql/data:/var/lib/postgresql/data
+    ports:
+      - "54320:5432"
