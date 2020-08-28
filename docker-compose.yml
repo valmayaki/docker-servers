@@ -56,3 +56,11 @@ services:
       - ./pgsql/data:/var/lib/postgresql/data
     ports:
       - "54320:5432"
+
+ 
+  nginx-proxy:
+    image: jwilder/nginx-proxy
+    ports:
+      - "80:80"
+    volumes:
+        - /var/run/docker.sock:/tmp/docker.sock:ro
