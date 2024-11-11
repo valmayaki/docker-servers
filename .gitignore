@@ -1,3 +1,6 @@
+.DS_Store
 pgsql/data
 mysql/data
 mysql8/data
+data
+image-registry/data
