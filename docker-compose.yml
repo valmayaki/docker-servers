@@ -160,6 +160,61 @@ services:
     - nginx-proxy
     environment:
     - VIRTUAL_HOST=image-registry.docker
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    ports:
+    - "8090:8080"
+    volumes:
+      - open-webui:/app/backend/data
+
+  n8n_db:
+    image: postgres:16
+    restart: always
+    env_file:
+      - ./n8n/.env
+    environment:
+      - "POSTGRES_USER=post"
+      - "POSTGRES_PASSWORD=secret"
+      - "POSTGRES_DB=n8n"
+      - "POSTGRES_NON_ROOT_USER=nonroot"
+      - "POSTGRES_NON_ROOT_PASSWORD=secret"
+    volumes:
+      - ./n8n/data:/var/lib/postgresql/data
+      - ./n8n/init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U post -d n8n']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - n8n_network
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    env_file:
+      - ./n8n/.env
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=post
+      - DB_POSTGRESDB_PASSWORD=secret
+    ports:
+      - 5678:5678
+    links:
+      - n8n_db:postgres
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      n8n_db:
+        condition: service_healthy
+    networks:
+      - n8n_network
+
 networks:
   caddy:
     external: true
@@ -167,7 +222,13 @@ networks:
     external: true
   dnsmasq:
     external: true
+  n8n_network:
+    external: true
+
 volumes:
   pgsql-data:
   pgadmin-data:
   caddy_data:
+  open-webui:
+  n8n_db_storage:
+  n8n_storage:
