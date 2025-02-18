@@ -1,0 +1,13 @@
+services:
+ ollama-service:
+    environment:
+      - "OLLAMA_DEBUG=true"
+    volumes:
+      - ${pwd}/ollama/data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

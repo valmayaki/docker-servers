@@ -4,3 +4,4 @@ mysql/data
 mysql8/data
 data
 image-registry/data
+./docker-compose.override.yml
