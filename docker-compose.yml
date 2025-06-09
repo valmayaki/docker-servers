@@ -43,9 +43,18 @@ services:
       - "5672:5672"
 
   pgsql:
-    image: pgsql
+    image: pgsql:16
+    container_name: pgsql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d freedb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     build:
       context: pgsql
+      tags:
+        - pgsql:16
       dockerfile: Dockerfile
     environment:
       POSTGRES_USER: root
@@ -55,7 +64,27 @@ services:
       - ./pgsql/data:/var/lib/postgresql/data
     ports:
       - "54320:5432"
-  
+  pgvector:
+    image: pgvector:17
+    container_name: pgvector
+    restart: always
+    build:
+      context: pgvector
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: freedb
+    volumes:
+      - ./pgvector/data:/var/lib/postgresql/data
+    ports:
+      - "54321:5432"
+    depends_on:
+      - pgsql
+    networks:
+      - default
+      - pgvector
+
   pgadmin:
     image: dpage/pgadmin4
     container_name:  PgAdmin
@@ -168,6 +197,9 @@ services:
     - "8090:8080"
     volumes:
       - open-webui:/app/backend/data
+    networks:
+      - default
+      - ollama
 
   n8n_db:
     image: postgres:16
@@ -215,8 +247,8 @@ services:
     networks:
       - n8n_network
 
-  ollama-service:
-    image: ollama/ollama:latest
+  ollama:
+    image: docker.io/ollama/ollama:latest
     expose:
       - 11434
     ports:
@@ -241,9 +273,12 @@ networks:
     external: true
   ollama:
     external: true
+  pgvector:
+    external: true
 
 volumes:
   pgsql-data:
+  # pgvector-data:
   pgadmin-data:
   caddy_data:
   open-webui:

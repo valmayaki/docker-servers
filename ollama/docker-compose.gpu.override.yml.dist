@@ -1,5 +1,5 @@
 services:
- ollama-service:
+ ollama:
     environment:
       - "OLLAMA_DEBUG=true"
     volumes:
