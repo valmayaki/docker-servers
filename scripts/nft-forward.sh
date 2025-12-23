@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+
+# trying to forec a commit
 set -euo pipefail
 
 ########################################
