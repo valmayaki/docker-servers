@@ -116,8 +116,34 @@ ensure_nft() {
     nft add chain ip filter forward { type filter hook forward priority 0 \; }
 }
 
-add_rule() { nft list ruleset | grep -F "$1" >/dev/null || nft add rule "$1"; }
-del_rule() { nft list ruleset | grep -F "$1" >/dev/null && nft delete rule "$1"; }
+rule_exists() {
+  local rule_str="$1"
+  # removing quotes to simplify awk parsing of the first 3 tokens
+  local clean_str="${rule_str//\"/}"
+  local family=$(echo "$clean_str" | awk '{print $1}')
+  local table=$(echo "$clean_str" | awk '{print $2}')
+  local chain=$(echo "$clean_str" | awk '{print $3}')
+  # Extract expression: everything after the 3rd space
+  local expr=$(echo "$rule_str" | cut -d' ' -f4-)
+
+  nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -F "$expr" >/dev/null
+}
+
+add_rule() {
+  if rule_exists "$1"; then
+    return 0
+  fi
+  nft add rule "$1"
+}
+
+del_rule() {
+  if rule_exists "$1"; then
+    nft delete rule "$1"
+    echo "✔ Deleted rule: $1"
+  else
+    echo "⚠ Rule not found (nothing to delete): $1"
+  fi
+}
 
 # -------------------------
 # Presets
