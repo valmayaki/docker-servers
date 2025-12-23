@@ -204,9 +204,12 @@ apply_proto() {
 
 delete_proto() {
   local P="$1"
+  local SRC=""
 
-  del_rule "ip nat prerouting iifname \"$IFACE\" $P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
-  del_rule "ip filter forward $P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
+  [[ "$LAN_ONLY" == "true" ]] && SRC="ip saddr $LAN_SUBNET"
+
+  del_rule "ip nat prerouting iifname \"$IFACE\" $SRC $P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
+  del_rule "ip filter forward $SRC $P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
   del_rule "ip filter forward $P sport $DEST_PORT ip saddr $DEST_IP ct state established accept comment \"nft-forward\""
 }
 
