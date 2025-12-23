@@ -137,9 +137,24 @@ add_rule() {
 }
 
 del_rule() {
-  if rule_exists "$1"; then
-    nft delete rule "$1"
-    echo "✔ Deleted rule: $1"
+  local rule_str="$1"
+  # removing quotes to simplify awk parsing of the first 3 tokens
+  local clean_str="${rule_str//\"/}"
+  local family=$(echo "$clean_str" | awk '{print $1}')
+  local table=$(echo "$clean_str" | awk '{print $2}')
+  local chain=$(echo "$clean_str" | awk '{print $3}')
+  # Extract expression: everything after the 3rd space
+  local expr=$(echo "$rule_str" | cut -d' ' -f4-)
+
+  # Get rule handle
+  local handle=$(nft -a list chain "$family" "$table" "$chain" 2>/dev/null | grep -F "$expr" | awk '/handle/ {print $NF}')
+
+  if [[ -n "$handle" ]]; then
+    # If multiple handles found (duplicates), iterate and delete all
+    for h in $handle; do
+      nft delete rule "$family" "$table" "$chain" handle "$h"
+      echo "✔ Deleted rule: $1 (handle $h)"
+    done
   else
     echo "⚠ Rule not found (nothing to delete): $1"
   fi
