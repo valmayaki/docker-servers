@@ -119,16 +119,29 @@ ensure_nft() {
 }
 
 rule_exists() {
-  local rule_str="$1"
-  # removing quotes to simplify awk parsing of the first 3 tokens
-  local clean_str="${rule_str//\"/}"
-  local family=$(echo "$clean_str" | awk '{print $1}')
-  local table=$(echo "$clean_str" | awk '{print $2}')
-  local chain=$(echo "$clean_str" | awk '{print $3}')
-  # Extract expression: everything after the 3rd space
+  local rule_str=$(echo "$1" | xargs) # Normalize whitespace
+  local family=$(echo "$rule_str" | awk '{print $1}')
+  local table=$(echo "$rule_str" | awk '{print $2}')
+  local chain=$(echo "$rule_str" | awk '{print $3}')
   local expr=$(echo "$rule_str" | cut -d' ' -f4-)
 
-  nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -F "$expr" >/dev/null
+  local chain_output=$(nft list chain "$family" "$table" "$chain" 2>/dev/null)
+  [[ -z "$chain_output" ]] && return 1
+
+  # Replace commas with spaces to handle "new,established" -> "new established"
+  local clean_expr="${expr//,/ }"
+
+  local match=true
+  for word in $clean_expr; do
+    # Skip "ip" keyword as nft often normalizes "ip saddr" to "saddr"
+    [[ "$word" == "ip" ]] && continue
+    
+    if ! echo "$chain_output" | grep -qF "${word//\"/}"; then
+      match=false
+      break
+    fi
+  done
+  $match
 }
 
 add_rule() {
@@ -139,20 +152,36 @@ add_rule() {
 }
 
 del_rule() {
-  local rule_str="$1"
-  # removing quotes to simplify awk parsing of the first 3 tokens
-  local clean_str="${rule_str//\"/}"
-  local family=$(echo "$clean_str" | awk '{print $1}')
-  local table=$(echo "$clean_str" | awk '{print $2}')
-  local chain=$(echo "$clean_str" | awk '{print $3}')
-  # Extract expression: everything after the 3rd space
+  local rule_str=$(echo "$1" | xargs) # Normalize whitespace
+  local family=$(echo "$rule_str" | awk '{print $1}')
+  local table=$(echo "$rule_str" | awk '{print $2}')
+  local chain=$(echo "$rule_str" | awk '{print $3}')
   local expr=$(echo "$rule_str" | cut -d' ' -f4-)
 
-  # Get rule handle
-  local handle=$(nft -a list chain "$family" "$table" "$chain" 2>/dev/null | grep -F "$expr" | awk '/handle/ {print $NF}')
+  # Get handles for rules matching all parts of the expression
+  local chain_output=$(nft -a list chain "$family" "$table" "$chain" 2>/dev/null)
+  [[ -z "$chain_output" ]] && { echo "⚠ Rule not found: $1"; return; }
+
+  # Replace commas with spaces
+  local clean_expr="${expr//,/ }"
+
+  local handle=$(echo "$chain_output" | while read -r line; do
+    local all_match=true
+    for word in $clean_expr; do
+      # Skip "ip" keyword
+      [[ "$word" == "ip" ]] && continue
+
+      if ! echo "$line" | grep -qF "${word//\"/}"; then
+        all_match=false
+        break
+      fi
+    done
+    if $all_match; then
+      echo "$line" | awk '/handle/ {print $NF}'
+    fi
+  done)
 
   if [[ -n "$handle" ]]; then
-    # If multiple handles found (duplicates), iterate and delete all
     for h in $handle; do
       nft delete rule "$family" "$table" "$chain" handle "$h"
       echo "✔ Deleted rule: $1 (handle $h)"
@@ -193,23 +222,23 @@ apply_service() {
 # -------------------------
 apply_proto() {
   local P="$1"
-  local SRC=""
+  local SRC_PART=""
 
-  [[ "$LAN_ONLY" == "true" ]] && SRC="ip saddr $LAN_SUBNET"
+  [[ "$LAN_ONLY" == "true" ]] && SRC_PART="ip saddr $LAN_SUBNET "
 
-  add_rule "ip nat prerouting iifname \"$IFACE\" $SRC $P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
-  add_rule "ip filter forward $SRC $P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
+  add_rule "ip nat prerouting iifname \"$IFACE\" ${SRC_PART}$P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
+  add_rule "ip filter forward ${SRC_PART}$P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
   add_rule "ip filter forward $P sport $DEST_PORT ip saddr $DEST_IP ct state established accept comment \"nft-forward\""
 }
 
 delete_proto() {
   local P="$1"
-  local SRC=""
+  local SRC_PART=""
 
-  [[ "$LAN_ONLY" == "true" ]] && SRC="ip saddr $LAN_SUBNET"
+  [[ "$LAN_ONLY" == "true" ]] && SRC_PART="ip saddr $LAN_SUBNET "
 
-  del_rule "ip nat prerouting iifname \"$IFACE\" $SRC $P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
-  del_rule "ip filter forward $SRC $P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
+  del_rule "ip nat prerouting iifname \"$IFACE\" ${SRC_PART}$P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
+  del_rule "ip filter forward ${SRC_PART}$P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
   del_rule "ip filter forward $P sport $DEST_PORT ip saddr $DEST_IP ct state established accept comment \"nft-forward\""
 }
 
