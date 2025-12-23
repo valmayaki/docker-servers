@@ -1,0 +1,252 @@
+# Production Environment - Core services with production-ready proxy
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml --profile prod up -d
+
+x-dns: &dns
+  dns:
+    - 172.20.0.53
+
+x-common-env: &common-env
+  POSTGRES_USER: ${POSTGRES_USER:-root}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB:-freedb}
+  MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+  MYSQL_DATABASE: ${MYSQL_DATABASE:-freedb}
+
+services:
+  # Production Databases
+  mysql8:
+    image: mysql:8
+    build:
+      context: mysql8
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    volumes:
+      - ./mysql8/data:/var/lib/mysql
+    ports:
+      - "33068:3306"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: pgvector
+    restart: always
+    build:
+      context: pgvector
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-env
+    volumes:
+      - ./pgvector/data:/var/lib/postgresql/data
+    ports:
+      - "54321:5432"
+    depends_on:
+      - pgsql
+    profiles: ["prod"]
+
+  pgsql:
+    image: postgres:16
+    container_name: pgsql
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    build:
+      context: pgsql
+      dockerfile: Dockerfile
+    volumes:
+      - ./pgsql/data:/var/lib/postgresql/data
+    ports:
+      - "54320:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  # Production Services
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: always
+    env_file:
+      - ./n8n/.env
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: post
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5678:5678"
+    links:
+      - n8n_db:postgres
+    volumes:
+      - ./n8n/.n8n:/home/node/.n8n
+      - ./n8n/.cache:/home/node/.cache
+    depends_on:
+      n8n_db:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  n8n_db:
+    image: postgres:16
+    restart: always
+    env_file:
+      - ./n8n/.env
+    environment:
+      POSTGRES_USER: post
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: n8n
+      POSTGRES_NON_ROOT_USER: nonroot
+      POSTGRES_NON_ROOT_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./n8n/data:/var/lib/postgresql/data
+      - ./n8n/init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U post -d n8n"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  firefly_app:
+    image: fireflyiii/core:latest
+    hostname: firefly_app
+    container_name: firefly_iii_core
+    restart: always
+    volumes:
+      - ./firefly/upload:/var/www/html/storage/upload
+    env_file: ./firefly/.env
+    ports:
+      - "8081:8080"
+    depends_on:
+      - firefly_db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  firefly_db:
+    image: mariadb:lts
+    hostname: db
+    container_name: firefly_iii_db
+    restart: always
+    env_file: ./firefly/.db.env
+    volumes:
+      - ./firefly/data:/var/lib/mysql
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  firefly_cron:
+    image: alpine
+    restart: always
+    container_name: firefly_iii_cron
+    env_file: ./firefly/.env
+    command: sh -c "
+      apk add tzdata curl && \
+      (ln -s /usr/share/zoneinfo/$$TZ /etc/localtime || true) && \
+      echo \"0 3 * * * wget -qO- http://firefly_app:8080/api/v1/cron/$$STATIC_CRON_TOKEN || exit 1\" | crontab - && \
+      crond -f -L /dev/stdout"
+    networks:
+      - firefly_iii
+    depends_on:
+      - firefly_app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  # Production Proxy - Caddy with SSL and security hardening
+  proxy-caddy:
+    image: lucaslorentz/caddy-docker-proxy:ci-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    labels:
+      - "caddy=(tls_docker_snippet)"
+      - "caddy.tls=/etc/ssl/certs/custom/docker.crt.pem /etc/ssl/private/custom/docker.key.pem"
+    environment:
+      - CADDY_INGRESS_NETWORKS=caddy
+    networks:
+      - caddy
+      - default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./certs/docker.crt.pem:/etc/ssl/certs/custom/docker.crt.pem
+      - ./certs/docker.key.pem:/etc/ssl/private/custom/docker.key.pem
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    profiles: ["prod"]
+
+networks:
+  caddy:
+  default: {}
+  firefly_iii:
+    driver: bridge
+  mynet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  n8n_network:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  firefly_iii_db:
+  firefly_iii_upload:
+  redis-data:
+  n8n_db_storage:
+  n8n_storage:
