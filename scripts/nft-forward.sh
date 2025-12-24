@@ -128,20 +128,24 @@ rule_exists() {
   local chain_output=$(nft list chain "$family" "$table" "$chain" 2>/dev/null)
   [[ -z "$chain_output" ]] && return 1
 
-  # Replace commas with spaces to handle "new,established" -> "new established"
+  # Replace commas with spaces
   local clean_expr="${expr//,/ }"
 
-  local match=true
-  for word in $clean_expr; do
-    # Skip "ip" keyword as nft often normalizes "ip saddr" to "saddr"
-    [[ "$word" == "ip" ]] && continue
-    
-    if ! echo "$chain_output" | grep -qF "${word//\"/}"; then
-      match=false
-      break
+  # Check per-line to avoid matching words across different rules
+  echo "$chain_output" | while read -r line; do
+    local all_match=true
+    for word in $clean_expr; do
+      [[ "$word" == "ip" ]] && continue
+      if ! echo "$line" | grep -qF "${word//\"/}"; then
+        all_match=false
+        break
+      fi
+    done
+    if $all_match; then
+      return 0 # Found a match on this line
     fi
   done
-  $match
+  return 1 # No match found on any line
 }
 
 add_rule() {
@@ -256,11 +260,8 @@ persist_rules() {
 
   [[ -f "$CONF" ]] && cp "$CONF" "$BK/nftables-$TS.conf"
   mv "$CONF.tmp" "$CONF"
-  echo "✔ Current rules backed up to $BK/nftables-$TS.conf"
-  echo "✔ New rules written to $CONF"
-  echo "Restarting nft-forward service via systemd..."
-  systemctl restart nft-forward
-  echo "✔ Rules persisted ($TS)"
+
+  echo "✔ Rules persisted to $CONF ($TS)"
 }
 
 rollback_rules() {
