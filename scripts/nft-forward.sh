@@ -256,8 +256,10 @@ persist_rules() {
 
   [[ -f "$CONF" ]] && cp "$CONF" "$BK/nftables-$TS.conf"
   mv "$CONF.tmp" "$CONF"
-
-  systemctl reload nft-forward || systemctl restart nft-forward
+  echo "✔ Current rules backed up to $BK/nftables-$TS.conf"
+  echo "✔ New rules written to $CONF"
+  echo "Restarting nft-forward service via systemd..."
+  systemctl restart nft-forward
   echo "✔ Rules persisted ($TS)"
 }
 
