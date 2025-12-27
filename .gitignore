@@ -6,3 +6,6 @@ data
 image-registry/data
 ./docker-compose.override.yml
 *.override.yml
+n8n/.n8n
+n8n/.cache
+n8n/.env
