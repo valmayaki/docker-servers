@@ -10,7 +10,79 @@ x-common-env: &common-env
   MYSQL_DATABASE: freedb
 
 services:
-  # Database Services
+  dnsmasq:
+    image: jpillora/dnsmasq
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./dnsmasq/config/dnsmasq.conf:/etc/dnsmasq.conf
+    environment:
+      HTTP_USER: ${DNS_USER:-admin}
+      HTTP_PASS: ${DNS_PASS:-admin}
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - dnsmasq
+      - default
+    profiles: ["networking"]
+
+  firefly_app:
+    image: fireflyiii/core:latest
+    hostname: firefly_app
+    container_name: firefly_iii_core
+    restart: always
+    volumes:
+      - ./firefly/upload:/var/www/html/storage/upload
+    env_file: ./firefly/.env
+    ports:
+      - "8081:8080"  # Changed from 80 to avoid conflicts
+    depends_on:
+      - firefly_db
+    profiles: ["finance"]
+
+  firefly_cron:
+    image: alpine
+    restart: always
+    container_name: firefly_iii_cron
+    env_file: ./firefly/.env
+    command:
+      - sh
+      - -c
+      - |
+        apk add tzdata curl && \
+        (ln -s /usr/share/zoneinfo/$$TZ /etc/localtime || true) && \
+        echo "0 3 * * * curl -f http://firefly_app:8080/api/v1/cron/$$STATIC_CRON_TOKEN || true" | crontab - && \
+        crond -f -L /dev/stdout
+    networks:
+      - firefly_iii
+    depends_on:
+      - firefly_app
+    profiles: ["finance"]
+
+  firefly_db:
+    image: mariadb:lts
+    hostname: db
+    container_name: firefly_iii_db
+    restart: always
+    env_file: ./firefly/.db.env
+    volumes:
+      - ./firefly/data:/var/lib/mysql
+    profiles: ["databases", "finance"]
+
+  image-registry:
+    image: registry:2
+    restart: unless-stopped
+    ports:
+      - "5200:5000"
+    volumes:
+      - image-registry-data:/var/lib/registry
+    networks:
+      - default
+    profiles: ["development"]
+
   mysql:
     image: mysql:8
     build:
@@ -38,6 +110,111 @@ services:
       - "33068:3306"
     restart: unless-stopped
     profiles: ["databases"]
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    env_file:
+      - ./n8n/.env
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: post
+      DB_POSTGRESDB_PASSWORD: secret
+    ports:
+      - "5678:5678"
+    links:
+      - n8n_db:postgres
+    volumes:
+      - ./n8n/.n8n:/home/node/.n8n
+      - ./n8n/.cache:/home/node/.cache
+    depends_on:
+      n8n_db:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["automation"]
+
+  n8n_db:
+    image: postgres:16
+    restart: always
+    env_file:
+      - ./n8n/.env
+    environment:
+      POSTGRES_USER: post
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: n8n
+      POSTGRES_NON_ROOT_USER: nonroot
+      POSTGRES_NON_ROOT_PASSWORD: secret
+    volumes:
+      - ./n8n/data:/var/lib/postgresql/data
+      - ./n8n/init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U post -d n8n"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: ["databases", "automation"]
+
+  nodejs:
+    image: node-ffmpeg
+    build:
+      context: node
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    profiles: ["development"]
+
+  ollama:
+    image: ollama/ollama:latest
+    expose:
+      - 11434
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/ || exit 1"]
+      interval: 5s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    profiles: ["ai"]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+    profiles: ["ai"]
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: PgAdmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-secret}
+      PGADMIN_LISTEN_PORT: 80
+    ports:
+      - "5011:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - default
+      - pgsql
+    links:
+      - pgsql:pgsql-server
+    profiles: ["development", "databases"]
 
   pgsql:
     image: postgres:16
@@ -76,219 +253,85 @@ services:
       - pgsql
     profiles: ["databases", "ai"]
 
-  n8n_db:
-    image: postgres:16
-    restart: always
-    env_file:
-      - ./n8n/.env
+  pihole:
+    image: pihole/pihole:latest
+    network_mode: host
+    volumes:
+      - ./pihole/conf:/etc/pihole
+      - ./pihole/dnsmasq:/etc/dnsmasq.d
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: post
-      POSTGRES_PASSWORD: secret
-      POSTGRES_DB: n8n
-      POSTGRES_NON_ROOT_USER: nonroot
-      POSTGRES_NON_ROOT_PASSWORD: secret
-    volumes:
-      - ./n8n/data:/var/lib/postgresql/data
-      - ./n8n/init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -U post -d n8n"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    profiles: ["databases", "automation"]
-
-  firefly_db:
-    image: mariadb:lts
-    hostname: db
-    container_name: firefly_iii_db
-    restart: always
-    env_file: ./firefly/.db.env
-    volumes:
-      - ./firefly/data:/var/lib/mysql
-    profiles: ["databases", "finance"]
-
-  # Application Services
-  nodejs:
-    image: node-ffmpeg
-    build:
-      context: node
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    restart: unless-stopped
-    profiles: ["development"]
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    restart: unless-stopped
-    profiles: ["cache", "automation"]
-
-  rabbitmq:
-    image: rabbitmq:4-management
-    ports:
-      - "15672:15672"
-      - "5672:5672"
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    restart: unless-stopped
-    profiles: ["queue", "automation"]
-
-  # AI/ML Services
-  ollama:
-    image: ollama/ollama:latest
-    expose:
-      - 11434
-    ports:
-      - "11434:11434"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:11434/ || exit 1"]
-      interval: 5s
-      timeout: 30s
-      retries: 5
-      start_period: 30s
-    volumes:
-      - ollama-data:/root/.ollama
-    restart: unless-stopped
-    profiles: ["ai"]
-
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    restart: unless-stopped
-    ports:
-      - "8090:8080"
-    volumes:
-      - open-webui:/app/backend/data
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-    depends_on:
-      - ollama
-    restart: unless-stopped
-    profiles: ["ai"]
-
-  # Automation Services
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    restart: always
-    env_file:
-      - ./n8n/.env
-    environment:
-      DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: postgres
-      DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: post
-      DB_POSTGRESDB_PASSWORD: secret
-    ports:
-      - "5678:5678"
-    links:
-      - n8n_db:postgres
-    volumes:
-      - ./n8n/.n8n:/home/node/.n8n
-      - ./n8n/.cache:/home/node/.cache
-    depends_on:
-      n8n_db:
-        condition: service_healthy
-    restart: unless-stopped
-    profiles: ["automation"]
-
-  # Finance Services
-  firefly_app:
-    image: fireflyiii/core:latest
-    hostname: firefly_app
-    container_name: firefly_iii_core
-    restart: always
-    volumes:
-      - ./firefly/upload:/var/www/html/storage/upload
-    env_file: ./firefly/.env
-    ports:
-      - "8081:8080"  # Changed from 80 to avoid conflicts
-    depends_on:
-      - firefly_db
-    profiles: ["finance"]
-
-  firefly_cron:
-    image: alpine
-    restart: always
-    container_name: firefly_iii_cron
-    env_file: ./firefly/.env
-    command: sh -c "
-      apk add tzdata curl && \
-      (ln -s /usr/share/zoneinfo/$$TZ /etc/localtime || true) && \
-      echo \"0 3 * * * curl -f http://firefly_app:8080/api/v1/cron/$$STATIC_CRON_TOKEN || true\" | crontab - && \
-      crond -f -L /dev/stdout"
+      DNSMASQ_LISTENING: "all"
     networks:
-      - firefly_iii
-    depends_on:
-      - firefly_app
-    profiles: ["finance"]
+      - default
+      - pihole
+    profiles: ["networking"]
 
-  # Port Management Service
   port-manager:
     image: alpine:latest
     container_name: port_manager
     restart: unless-stopped
-    command: sh -c "
-      apk add --no-cache socat jq
-      echo 'Starting port manager for proxy services...'
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache socat jq
+        echo 'Starting port manager for proxy services...'
 
-      # Function to check if proxy is running
-      is_proxy_running() {
-        docker ps --format '{{.Names}}' | grep -q \"proxy-\\$$$$1\"$$
-      }
+        # Function to check if proxy is running
+        is_proxy_running() {
+          docker ps --format '{{.Names}}' | grep -q "proxy-$$1"
+        }
 
-      # Function to stop a proxy
-      stop_proxy() {
-        echo \"Stopping $$1...\"
-        docker compose -f /docker-compose.yml --profile $$1 down
-        sleep 2
-      }
+        # Function to stop a proxy
+        stop_proxy() {
+          echo "Stopping $$1..."
+          docker compose -f /docker-compose.yml --profile $$1 down
+          sleep 2
+        }
 
-      # Function to start a proxy with ports 80/443
-      start_proxy() {
-        echo \"Starting $$1 with ports 80/443...\"
-        docker compose -f /docker-compose.yml --profile proxy --profile $$1-direct up -d
-        sleep 3
-      }
+        # Function to start a proxy with ports 80/443
+        start_proxy() {
+          echo "Starting $$1 with ports 80/443..."
+          docker compose -f /docker-compose.yml --profile proxy --profile $$1-direct up -d
+          sleep 3
+        }
 
-      # Main port management logic
-      while true; do
-        active_proxies=()
+        # Main port management logic
+        while true; do
+          active_proxies=()
 
-        # Check which proxies are running
-        if is_proxy_running \"caddy\"; then active_proxies+=(\"caddy\"); fi
-        if is_proxy_running \"nginx\"; then active_proxies+=(\"nginx\"); fi
-        if is_proxy_running \"manager\"; then active_proxies+=(\"manager\"); fi
-        if is_proxy_running \"traefik\"; then active_proxies+=(\"traefik\"); fi
+          # Check which proxies are running
+          if is_proxy_running "caddy"; then active_proxies+=("caddy"); fi
+          if is_proxy_running "nginx"; then active_proxies+=("nginx"); fi
+          if is_proxy_running "manager"; then active_proxies+=("manager"); fi
+          if is_proxy_running "traefik"; then active_proxies+=("traefik"); fi
 
-        case \"${#active_proxies[@]}\" in
-          0)
-            echo \"No proxy running - starting Caddy (default)\"
-            start_proxy \"caddy\"
-            ;;
-          1)
-            echo \"Only $$active_proxies running - keeping active\"
-            ;;
-          2|3|4)
-            echo \"Multiple proxies running ($${active_proxies[*]}) - stopping all except first\"
-            # Keep first one, stop others
-            first_proxy=\"$$active_proxies\"
-            for proxy in \"$$${active_proxies[@]}\"; do
-              if [ \"\\$$proxy\" != \"\\$$first_proxy\" ]; then
-                stop_proxy \"\\$$proxy\"
-              fi
-            done
-            echo \"Active proxy: $$first_proxy\"
-            ;;
-        esac
+          case "$${#active_proxies[@]}" in
+            0)
+              echo "No proxy running - starting Caddy (default)"
+              start_proxy "caddy"
+              ;;
+            1)
+              echo "Only $${active_proxies[0]} running - keeping active"
+              ;;
+            2|3|4)
+              echo "Multiple proxies running ($${active_proxies[*]}) - stopping all except first"
+              # Keep first one, stop others
+              first_proxy="$${active_proxies[0]}"
+              for proxy in "$${active_proxies[@]}"; do
+                if [ "$$proxy" != "$$first_proxy" ]; then
+                  stop_proxy "$$proxy"
+                fi
+              done
+              echo "Active proxy: $$first_proxy"
+              ;;
+          esac
 
-        sleep 10
-      done
-    "
+          sleep 10
+        done
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/port-manager-state:/state
@@ -296,7 +339,6 @@ services:
     pid: host
     profiles: ["proxy", "port-manager"]
 
-  # Proxy Services - Now using alternative ports, port-manager handles 80/443
   proxy-caddy:
     image: lucaslorentz/caddy-docker-proxy:ci-alpine
     ports:
@@ -320,58 +362,6 @@ services:
     restart: unless-stopped
     profiles: ["proxy", "caddy"]
 
-  proxy-nginx:
-    image: jwilder/nginx-proxy
-    ports:
-      - "8080:80"     # Changed to avoid conflicts
-      - "8443:443"    # Changed to avoid conflicts
-    volumes:
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-      - ./certs:/etc/nginx/certs:ro
-    networks:
-      - nginx-proxy
-      - default
-    restart: unless-stopped
-    profiles: ["proxy", "nginx"]
-
-  proxy-manager:
-    image: jc21/nginx-proxy-manager:latest
-    restart: unless-stopped
-    ports:
-      - "8081:80"     # Changed to avoid conflicts
-      - "8082:81"     # Dashboard port
-      - "8444:443"    # Changed to avoid conflicts
-    volumes:
-      - ./nginx-proxy-manager/data:/data
-      - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
-    networks:
-      - nginx-proxy
-      - default
-    restart: unless-stopped
-    profiles: ["proxy", "manager"]
-
-  traefik:
-    image: traefik:v3.0
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-    ports:
-      - "8085:80"     # Changed to avoid conflicts
-      - "8445:443"    # Changed to avoid conflicts
-      - "8086:8080"   # Traefik dashboard
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./certs:/certs
-      - ./traefik/config:/traefik/config
-    networks:
-      - default
-      - traefik
-    restart: unless-stopped
-    profiles: ["proxy", "traefik"]
-
-  # Direct Access Proxies - These can use 80/443 when port-manager is active
   proxy-caddy-direct:
     image: lucaslorentz/caddy-docker-proxy:ci-alpine
     ports:
@@ -396,21 +386,20 @@ services:
     restart: unless-stopped
     profiles: ["proxy", "caddy-direct"]
 
-  proxy-nginx-direct:
-    image: jwilder/nginx-proxy
-    ports:
-      - "80:80"          # Can use 80/443 when port-manager is active
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-      - ./certs:/etc/nginx/certs:ro
-    environment:
-      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
-    networks:
-      - nginx-direct     # Separate network for direct access
-      - default
+  proxy-manager:
+    image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
-    profiles: ["proxy", "nginx-direct"]
+    ports:
+      - "8081:80"     # Changed to avoid conflicts
+      - "8082:81"     # Dashboard port
+      - "8444:443"    # Changed to avoid conflicts
+    volumes:
+      - ./nginx-proxy-manager/data:/data
+      - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
+    networks:
+      - nginx-proxy
+      - default
+    profiles: ["proxy", "manager"]
 
   proxy-manager-direct:
     image: jc21/nginx-proxy-manager:latest
@@ -427,8 +416,77 @@ services:
     networks:
       - nginx-direct     # Separate network for direct access
       - default
-    restart: unless-stopped
     profiles: ["proxy", "manager-direct"]
+
+  proxy-nginx:
+    image: jwilder/nginx-proxy
+    ports:
+      - "8080:80"     # Changed to avoid conflicts
+      - "8443:443"    # Changed to avoid conflicts
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - nginx-proxy
+      - default
+    restart: unless-stopped
+    profiles: ["proxy", "nginx"]
+
+  proxy-nginx-direct:
+    image: jwilder/nginx-proxy
+    ports:
+      - "80:80"          # Can use 80/443 when port-manager is active
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./certs:/etc/nginx/certs:ro
+    environment:
+      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
+    networks:
+      - nginx-direct     # Separate network for direct access
+      - default
+    restart: unless-stopped
+    profiles: ["proxy", "nginx-direct"]
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    profiles: ["queue", "automation"]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    profiles: ["cache", "automation"]
+
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "8085:80"     # Changed to avoid conflicts
+      - "8445:443"    # Changed to avoid conflicts
+      - "8086:8080"   # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./certs:/certs
+      - ./traefik/config:/traefik/config
+    networks:
+      - default
+      - traefik
+    restart: unless-stopped
+    profiles: ["proxy", "traefik"]
 
   traefik-direct:
     image: traefik:v3.0
@@ -452,72 +510,6 @@ services:
       - default
     restart: unless-stopped
     profiles: ["proxy", "traefik-direct"]
-
-  # Development/Utility Services
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: PgAdmin
-    restart: always
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-secret}
-      PGADMIN_LISTEN_PORT: 80
-    ports:
-      - "5011:80"
-    volumes:
-      - pgadmin-data:/var/lib/pgadmin
-    networks:
-      - default
-      - pgsql
-    links:
-      - pgsql:pgsql-server
-    profiles: ["development", "databases"]
-
-  image-registry:
-    image: registry:2
-    restart: unless-stopped
-    ports:
-      - "5200:5000"
-    volumes:
-      - image-registry-data:/var/lib/registry
-    networks:
-      - default
-    profiles: ["development"]
-
-  dnsmasq:
-    image: jpillora/dnsmasq
-    restart: unless-stopped
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
-    volumes:
-      - ./dnsmasq/config/dnsmasq.conf:/etc/dnsmasq.conf
-    environment:
-      HTTP_USER: ${DNS_USER:-admin}
-      HTTP_PASS: ${DNS_PASS:-admin}
-    cap_add:
-      - NET_ADMIN
-    networks:
-      - dnsmasq
-      - default
-    profiles: ["networking"]
-
-  pihole:
-    image: pihole/pihole:latest
-    network_mode: host
-    volumes:
-      - ./pihole/conf:/etc/pihole
-      - ./pihole/dnsmasq:/etc/dnsmasq.d
-    cap_add:
-      - NET_ADMIN
-    restart: unless-stopped
-    environment:
-      DNSMASQ_LISTENING: "all"
-    networks:
-      - default
-      - pihole
-    profiles: ["networking"]
 
 networks:
   caddy:
