@@ -38,7 +38,7 @@ services:
       - ./firefly/upload:/var/www/html/storage/upload
     env_file: ./firefly/.env
     ports:
-      - "8081:8080"  # Changed from 80 to avoid conflicts
+      - "8081:8080" # Changed from 80 to avoid conflicts
     depends_on:
       - firefly_db
     profiles: ["finance"]
@@ -112,7 +112,10 @@ services:
     profiles: ["databases"]
 
   n8n:
-    image: n8nio/n8n:latest
+    build:
+      context: ./n8n
+      dockerfile: Dockerfile
+    image: n8n-custom:latest
     container_name: n8n
     env_file:
       - ./n8n/.env
@@ -123,6 +126,8 @@ services:
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: post
       DB_POSTGRESDB_PASSWORD: secret
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium-browser
     ports:
       - "5678:5678"
     links:
@@ -267,6 +272,7 @@ services:
     networks:
       - default
       - pihole
+      - pihole_ip6net
     profiles: ["networking"]
 
   port-manager:
@@ -365,7 +371,7 @@ services:
   proxy-caddy-direct:
     image: lucaslorentz/caddy-docker-proxy:ci-alpine
     ports:
-      - "80:80"        # Can use 80/443 when port-manager is active
+      - "80:80" # Can use 80/443 when port-manager is active
       - "443:443"
       - "2019:2019"
     labels:
@@ -373,9 +379,9 @@ services:
       - "caddy.tls=/etc/ssl/certs/custom/docker.crt.pem /etc/ssl/private/custom/docker.key.pem"
     environment:
       - CADDY_INGRESS_NETWORKS=caddy
-      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
+      - PROXY_MODE=direct # Custom flag to identify this is direct mode
     networks:
-      - caddy-direct    # Separate network for direct access
+      - caddy-direct # Separate network for direct access
       - default
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -390,9 +396,9 @@ services:
     image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
     ports:
-      - "8081:80"     # Changed to avoid conflicts
-      - "8082:81"     # Dashboard port
-      - "8444:443"    # Changed to avoid conflicts
+      - "8081:80" # Changed to avoid conflicts
+      - "8082:81" # Dashboard port
+      - "8444:443" # Changed to avoid conflicts
     volumes:
       - ./nginx-proxy-manager/data:/data
       - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
@@ -405,24 +411,24 @@ services:
     image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
     ports:
-      - "80:80"          # Can use 80/443 when port-manager is active
-      - "81:81"           # Dashboard port
+      - "80:80" # Can use 80/443 when port-manager is active
+      - "81:81" # Dashboard port
       - "443:443"
     volumes:
       - ./nginx-proxy-manager/data:/data
       - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
     environment:
-      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
+      - PROXY_MODE=direct # Custom flag to identify this is direct mode
     networks:
-      - nginx-direct     # Separate network for direct access
+      - nginx-direct # Separate network for direct access
       - default
     profiles: ["proxy", "manager-direct"]
 
   proxy-nginx:
     image: jwilder/nginx-proxy
     ports:
-      - "8080:80"     # Changed to avoid conflicts
-      - "8443:443"    # Changed to avoid conflicts
+      - "8080:80" # Changed to avoid conflicts
+      - "8443:443" # Changed to avoid conflicts
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - ./certs:/etc/nginx/certs:ro
@@ -435,15 +441,15 @@ services:
   proxy-nginx-direct:
     image: jwilder/nginx-proxy
     ports:
-      - "80:80"          # Can use 80/443 when port-manager is active
+      - "80:80" # Can use 80/443 when port-manager is active
       - "443:443"
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - ./certs:/etc/nginx/certs:ro
     environment:
-      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
+      - PROXY_MODE=direct # Custom flag to identify this is direct mode
     networks:
-      - nginx-direct     # Separate network for direct access
+      - nginx-direct # Separate network for direct access
       - default
     restart: unless-stopped
     profiles: ["proxy", "nginx-direct"]
@@ -475,9 +481,9 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
     ports:
-      - "8085:80"     # Changed to avoid conflicts
-      - "8445:443"    # Changed to avoid conflicts
-      - "8086:8080"   # Traefik dashboard
+      - "8085:80" # Changed to avoid conflicts
+      - "8445:443" # Changed to avoid conflicts
+      - "8086:8080" # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./certs:/certs
@@ -496,17 +502,17 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
     ports:
-      - "80:80"          # Can use 80/443 when port-manager is active
+      - "80:80" # Can use 80/443 when port-manager is active
       - "443:443"
-      - "8087:8080"   # Traefik dashboard
+      - "8087:8080" # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./certs:/certs
       - ./traefik/config:/traefik/config
     environment:
-      - PROXY_MODE=direct  # Custom flag to identify this is direct mode
+      - PROXY_MODE=direct # Custom flag to identify this is direct mode
     networks:
-      - traefik-direct   # Separate network for direct access
+      - traefik-direct # Separate network for direct access
       - default
     restart: unless-stopped
     profiles: ["proxy", "traefik-direct"]
@@ -531,6 +537,11 @@ networks:
   pgsql:
   pgvector:
   pihole:
+  pihole_ip6net:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 2001:db8::/64
   redis:
 
 volumes:
