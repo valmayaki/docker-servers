@@ -81,6 +81,11 @@ detect_lan() {
   ip route | awk '/default/ {print $3}' | xargs -I{} ip route | awk '/src/ {print $1; exit}'
 }
 
+detect_lan_from_iface() {
+  local iface="$1"
+  ip -4 route show dev "$iface" scope link | awk '{print $1; exit}'
+}
+
 select_iface() {
   if [[ ! -t 0 ]]; then
     echo "✖ Non-interactive mode: --iface must be specified"
@@ -227,9 +232,12 @@ apply_service() {
 apply_proto() {
   local P="$1"
   local SRC_PART=""
-
+  if [[ "$LAN_ONLY" == "true" && "$LAN_SUBNET" == "auto" ]]; then
+    echo "✖ --lan-only requires a resolvable LAN subnet"
+    exit 1
+  fi
   [[ "$LAN_ONLY" == "true" ]] && SRC_PART="ip saddr $LAN_SUBNET "
-
+  
   add_rule "ip nat prerouting iifname \"$IFACE\" ${SRC_PART}$P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
   add_rule "ip filter forward ${SRC_PART}$P dport $DEST_PORT ip daddr $DEST_IP ct state new,established accept comment \"nft-forward\""
   add_rule "ip filter forward $P sport $DEST_PORT ip saddr $DEST_IP ct state established accept comment \"nft-forward\""
@@ -238,7 +246,10 @@ apply_proto() {
 delete_proto() {
   local P="$1"
   local SRC_PART=""
-
+  if [[ "$LAN_ONLY" == "true" && "$LAN_SUBNET" == "auto" ]]; then
+    echo "✖ --lan-only requires a resolvable LAN subnet"
+    exit 1
+  fi
   [[ "$LAN_ONLY" == "true" ]] && SRC_PART="ip saddr $LAN_SUBNET "
 
   del_rule "ip nat prerouting iifname \"$IFACE\" ${SRC_PART}$P dport $HOST_PORT dnat to $DEST_IP:$DEST_PORT comment \"nft-forward\""
@@ -321,9 +332,15 @@ doctor() {
 
 detect_firewall_backend
 
-[[ "$LAN_SUBNET" == "auto" ]] && LAN_SUBNET="$(detect_lan)"
+# [[ "$LAN_SUBNET" == "auto" ]] && LAN_SUBNET="$(detect_lan)"
 [[ "$IFACE" == "auto" || -z "$IFACE" ]] && select_iface
-
+if [[ "$LAN_SUBNET" == "auto" ]]; then
+  if [[ -z "$IFACE" || "$IFACE" == "auto" ]]; then
+    echo "✖ LAN subnet auto-detection requires --iface"
+    exit 1
+  fi
+  LAN_SUBNET="$(detect_lan_from_iface "$IFACE")"
+fi
 case "$ACTION" in
   add|delete)
     ensure_nft

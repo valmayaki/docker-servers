@@ -89,7 +89,7 @@ If you prefer not to use the port manager, you can still use alternative ports:
 - **pgvector**: Included for vector storage
 
 ### Automation Services (`--profile automation`)
-- **n8n**: Port 5678 (Workflow Automation)
+- **n8n**: Port 5678 (Workflow Automation) - Custom build with Playwright & Puppeteer
 - **Redis**: Port 6379 (Cache)
 - **RabbitMQ**: Ports 5672, 15672 (Queue)
 
@@ -251,6 +251,49 @@ Services with dependencies will automatically start in correct order:
 sudo chown -R $USER:$USER ./volumes/
 chmod -R 755 ./volumes/
 ```
+
+## Custom n8n Build (Playwright & Puppeteer)
+
+The n8n service uses a custom Docker image that includes browser automation capabilities.
+
+### Included Packages
+- **n8n-nodes-playwright**: Browser automation using Playwright ([GitHub](https://github.com/valmayaki/n8n-playwright))
+- **n8n-nodes-puppeteer**: Browser automation using Puppeteer (from npm)
+- **Chromium**: System-installed browser for headless automation
+
+### Building the Custom Image
+```bash
+# Build the custom n8n image
+docker compose build n8n
+
+# Rebuild without cache (after Dockerfile changes)
+docker compose build --no-cache n8n
+```
+
+### Starting n8n
+```bash
+# Start n8n with automation profile
+docker compose --profile automation up -d n8n
+
+# Or start with databases
+docker compose --profile automation --profile databases up -d
+```
+
+### Verifying Installation
+```bash
+# Check installed packages
+docker exec -it n8n sh -c "ls /usr/local/lib/node_modules/n8n/node_modules | grep -E 'playwright|puppeteer'"
+```
+
+### Browser Configuration
+The image is pre-configured to use system Chromium:
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser`
+- `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser`
+
+### Usage Notes
+- Both Playwright and Puppeteer nodes will appear in n8n's node palette
+- Browsers run in headless mode by default
+- For custom scripts, use the Playwright node's "Run Custom Script" operation
 
 ## Advanced Usage
 

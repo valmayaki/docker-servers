@@ -9,3 +9,4 @@ image-registry/data
 n8n/.n8n
 n8n/.cache
 n8n/.env
+.env
