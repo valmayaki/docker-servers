@@ -10,3 +10,5 @@ n8n/.n8n
 n8n/.cache
 n8n/.env
 .env
+pihole/conf/*
+pihole/dnsmasq/*

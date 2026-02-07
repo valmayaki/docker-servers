@@ -19,7 +19,7 @@ x-tailscale: &tailscale
   env_file:
   - .env
   environment:
-  - TS_AUTHKEY=${TS_AUTHKEY:?error: TS_AUTHKEY is not set}
+  - TS_AUTHKEY=${TS_AUTHKEY:?error:TS_AUTHKEY is not set}
   # - TS_HOSTNAME=${TS_HOSTNAME=tailscale-node}
   - TS_EXTRA_ARGS=--advertise-tags=tag:container --reset
   - TS_SERVE_CONFIG=/config/serve-config.json
